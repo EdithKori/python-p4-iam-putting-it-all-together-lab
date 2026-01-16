@@ -1,63 +1,86 @@
-#!/usr/bin/env python3
+from sqlalchemy.orm import validates, relationship
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy_serializer import SerializerMixin
 
-from random import randint, choice as rc
+from config import db, bcrypt
 
-from faker import Faker
+class User(db.Model, SerializerMixin):
+    __tablename__ = 'users'
 
-from app import app
-from models import db, Recipe, User
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String, nullable=False, unique=True)
+    _password_hash = db.Column(db.String, nullable=True)
+    image_url = db.Column(db.String)
+    bio = db.Column(db.String)
 
-fake = Faker()
+    # Relationships
+    recipes = relationship("Recipe", backref="user", lazy=True)
+    serialize_only = ('id', 'username', 'image_url', 'bio', 'recipes')
 
-with app.app_context():
 
-    print("Deleting all records...")
-    Recipe.query.delete()
-    User.query.delete()
 
-    fake = Faker()
+    # Serialization rules (hide password hash)
+    serialize_rules = ('-recipes.user', '-_password_hash',)
 
-    print("Creating users...")
+    # Password property
+    @hybrid_property
+    def password_hash(self):
+        raise AttributeError("Password hashes are not viewable.")
 
-    # make sure users have unique usernames
-    users = []
-    usernames = []
+    @password_hash.setter
+    def password_hash(self, password):
+        self._password_hash = bcrypt.generate_password_hash(password.encode('utf-8')).decode('utf-8')
 
-    for i in range(20):
-        
-        username = fake.first_name()
-        while username in usernames:
-            username = fake.first_name()
-        usernames.append(username)
+    def authenticate(self, password):
+        """Check if provided password matches stored hash."""
+        return bcrypt.check_password_hash(self._password_hash, password.encode('utf-8'))
 
-        user = User(
-            username=username,
-            bio=fake.paragraph(nb_sentences=3),
-            image_url=fake.url(),
-        )
+    # Validations
+    @validates("username")
+    def validate_username(self, key, username):
+        if not username or username.strip() == "":
+            raise ValueError("Username must be present.")
+        return username
 
-        user.password_hash = user.username + 'password'
 
-        users.append(user)
 
-    db.session.add_all(users)
 
-    print("Creating recipes...")
-    recipes = []
-    for i in range(100):
-        instructions = fake.paragraph(nb_sentences=8)
-        
-        recipe = Recipe(
-            title=fake.sentence(),
-            instructions=instructions,
-            minutes_to_complete=randint(15,90),
-        )
 
-        recipe.user = rc(users)
-
-        recipes.append(recipe)
-
-    db.session.add_all(recipes)
     
-    db.session.commit()
-    print("Complete.")
+
+class Recipe(db.Model, SerializerMixin):
+    __tablename__ = 'recipes'
+
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String, nullable=False)
+    instructions = db.Column(db.String, nullable=False)
+    minutes_to_complete = db.Column(db.Integer, nullable=False)
+
+    # Foreign key
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+
+    # Serialization rules
+    serialize_rules = ('-user.recipes',)
+    serialize_only = ('id', 'title', 'instructions', 'minutes_to_complete', 'user')
+
+
+    # Validations
+    @validates("title")
+    def validate_title(self, key, title):
+        if not title or title.strip() == "":
+            raise ValueError("Title must be present.")
+        return title
+
+    @validates("instructions")
+    def validate_instructions(self, key, instructions):
+        if not instructions or instructions.strip() == "":
+            raise ValueError("Instructions must be present.")
+        if len(instructions.strip()) < 50:
+            raise ValueError("Instructions must be at least 50 characters long.")
+        return instructions
+
+
+
+
+    
+    
